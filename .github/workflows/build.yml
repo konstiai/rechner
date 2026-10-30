@@ -14,7 +14,7 @@ jobs:
       - name: Node.js einrichten
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Pakete installieren
         run: npm install --legacy-peer-deps
@@ -29,16 +29,19 @@ jobs:
 
       - name: App ohne Apple-Konto bauen
         run: |
-          WORKSPACE=$(ls ios/*.xcworkspace | head -n 1)
-          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          echo "Baue Workspace: $WORKSPACE mit Scheme: $SCHEME"
           xcodebuild -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath ios/build \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
 
       - name: In .ipa umwandeln
         run: |
