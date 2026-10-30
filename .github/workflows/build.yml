@@ -1,0 +1,53 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Code laden
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Pakete installieren
+        run: npm install --legacy-peer-deps
+
+      - name: iOS-Projekt generieren
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: CocoaPods installieren
+        run: |
+          cd ios
+          pod install
+
+      - name: App ohne Apple-Konto bauen
+        run: |
+          WORKSPACE=$(ls ios/*.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          xcodebuild -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: In .ipa umwandeln
+        run: |
+          mkdir -p Payload
+          cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
+          zip -qq -r Rechner.ipa Payload
+
+      - name: Fertige .ipa bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fertige-Rechner-IPA
+          path: Rechner.ipa
