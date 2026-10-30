@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Rechner",
+    "slug": "klicker-spiel",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.konsti.rechner"
+    },
+    "android": {
+      "package": "com.konsti.rechner"
+    }
+  }
+}
