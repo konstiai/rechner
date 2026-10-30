@@ -16,37 +16,188 @@ jobs:
         with:
           node-version: 22
 
-      - name: Pakete installieren
-        run: npm install --legacy-peer-deps
-
-      - name: iOS-Projekt generieren
-        run: npx expo prebuild --platform ios --no-install
-
-      - name: CocoaPods installieren
+      - name: App.js für iOS bündeln
         run: |
-          cd ios
-          pod install
+          mkdir -p Payload/Rechner.app
+          echo '{"name":"rechner","private":true}' > package.json
+          npm install --legacy-peer-deps react@18.3.1 react-dom@18.3.1 react-native-web@0.19.13 esbuild@0.25.0
 
-      - name: App ohne Apple-Konto bauen
-        run: |
-          cd ios
-          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
-          SCHEME="${WORKSPACE%.xcworkspace}"
-          echo "Baue Workspace: $WORKSPACE mit Scheme: $SCHEME"
-          xcodebuild -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM=""
+          cat << 'EOF' > web_entry.js
+          import React from 'react';
+          import { createRoot } from 'react-dom/client';
+          import App from './App';
 
-      - name: In .ipa umwandeln
+          const root = createRoot(document.getElementById('root'));
+          root.render(<App />);
+          EOF
+
+          npx esbuild web_entry.js \
+            --bundle \
+            --minify \
+            --loader:.js=jsx \
+            --alias:react-native=react-native-web \
+            --define:process.env.NODE_ENV=\"production\" \
+            --define:__DEV__=false \
+            --outfile=bundle.js
+
+          node -e '
+            const fs = require("fs");
+            const js = fs.readFileSync("bundle.js", "utf8").replace(/<\/script>/gi, "<\\/script>");
+            const html = [
+              "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>",
+              "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover\"/>",
+              "<style>*{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;box-sizing:border-box;}",
+              "html,body,#root{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;display:flex;flex-direction:column;font-family:-apple-system,BlinkMacSystemFont,sans-serif;}</style>",
+              "</head><body><div id=\"root\"></div><script>",
+              js,
+              "</script></body></html>"
+            ].join("");
+            fs.writeFileSync("Payload/Rechner.app/index.html", html, "utf8");
+          '
+
+      - name: Native iOS-App kompilieren & für TrollStore signieren
         run: |
-          mkdir -p Payload
-          cp -r ios/build/Build/Products/Release-iphoneos/*.app Payload/
+          cat << 'EOF' > main.m
+          #import <UIKit/UIKit.h>
+          #import <WebKit/WebKit.h>
+
+          @interface ViewController : UIViewController
+          @property (nonatomic, strong) WKWebView *webView;
+          @end
+
+          @implementation ViewController
+          - (UIStatusBarStyle)preferredStatusBarStyle {
+              return UIStatusBarStyleLightContent;
+          }
+          - (void)viewDidLoad {
+              [super viewDidLoad];
+              self.view.backgroundColor = [UIColor blackColor];
+
+              WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+              self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
+              self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+              self.webView.opaque = NO;
+              self.webView.backgroundColor = [UIColor blackColor];
+              self.webView.scrollView.backgroundColor = [UIColor blackColor];
+              self.webView.scrollView.bounces = NO;
+              self.webView.scrollView.scrollEnabled = NO;
+              if (@available(iOS 11.0, *)) {
+                  self.webView.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+              }
+              [self.view addSubview:self.webView];
+
+              NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
+              if (htmlPath) {
+                  NSString *html = [NSString stringWithContentsOfFile:htmlPath encoding:NSUTF8StringEncoding error:nil];
+                  [self.webView loadHTMLString:html baseURL:[[NSBundle mainBundle] bundleURL]];
+              }
+          }
+          @end
+
+          @interface AppDelegate : UIResponder <UIApplicationDelegate>
+          @property (nonatomic, strong) UIWindow *window;
+          @end
+
+          @implementation AppDelegate
+          - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+              self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+              self.window.rootViewController = [[ViewController alloc] init];
+              [self.window makeKeyAndVisible];
+              return YES;
+          }
+          @end
+
+          int main(int argc, char * argv[]) {
+              @autoreleasepool {
+                  return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
+              }
+          }
+          EOF
+
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK_PATH" \
+            -miphoneos-version-min=13.0 \
+            -fobjc-arc \
+            -O2 \
+            main.m \
+            -framework Foundation \
+            -framework UIKit \
+            -framework WebKit \
+            -framework CoreGraphics \
+            -o Payload/Rechner.app/Rechner
+
+          chmod +x Payload/Rechner.app/Rechner
+
+          if [ -f "assets/icon.png" ]; then
+            sips -s format png -z 120 120 assets/icon.png --out Payload/Rechner.app/AppIcon60x60@2x.png || cp assets/icon.png Payload/Rechner.app/AppIcon60x60@2x.png
+            cp Payload/Rechner.app/AppIcon60x60@2x.png Payload/Rechner.app/Icon.png
+          fi
+
+          cat << 'EOF' > Payload/Rechner.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>de</string>
+            <key>CFBundleDisplayName</key>
+            <string>Rechner</string>
+            <key>CFBundleExecutable</key>
+            <string>Rechner</string>
+            <key>CFBundleIconFile</key>
+            <string>Icon.png</string>
+            <key>CFBundleIcons</key>
+            <dict>
+              <key>CFBundlePrimaryIcon</key>
+              <dict>
+                <key>CFBundleIconFiles</key>
+                <array>
+                  <string>AppIcon60x60</string>
+                  <string>Icon.png</string>
+                </array>
+              </dict>
+            </dict>
+            <key>CFBundleIdentifier</key>
+            <string>com.konsti.rechner</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>Rechner</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0.0</string>
+            <key>CFBundleVersion</key>
+            <string>1.0.0</string>
+            <key>LSRequiresIPhoneOS</key>
+            <true/>
+            <key>MinimumOSVersion</key>
+            <string>13.0</string>
+            <key>UIDeviceFamily</key>
+            <array>
+              <integer>1</integer>
+              <integer>2</integer>
+            </array>
+            <key>UILaunchScreen</key>
+            <dict/>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+              <string>arm64</string>
+            </array>
+            <key>UISupportedInterfaceOrientations</key>
+            <array>
+              <string>UIInterfaceOrientationPortrait</string>
+            </array>
+            <key>UIViewControllerBasedStatusBarAppearance</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          echo -n "APPL????" > Payload/Rechner.app/PkgInfo
+          codesign --force --sign - --timestamp=none Payload/Rechner.app
           zip -qq -r Rechner.ipa Payload
 
       - name: Fertige .ipa bereitstellen
